@@ -1,4 +1,4 @@
-# ⚡ MeetingMind — Meeting Intelligence Layers
+# ⚡ MeetingMind — Meeting Intelligence Layer
 
 Upload a meeting recording. Get back structured intelligence: action items with owners, decisions made, open questions, and a ready-to-send follow-up email.
 
