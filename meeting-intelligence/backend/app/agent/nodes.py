@@ -4,19 +4,29 @@ import os
 from openai import AsyncOpenAI
 import google.generativeai as genai
 from app.agent.state import AgentState, MeetingIntelligence, ActionItem, Decision
+from langchain_groq import ChatGroq
 
 # Whisper still uses OpenAI (best in class for transcription)
 whisper_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # All LLM calls use Gemini
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-gemini = genai.GenerativeModel("gemini-2.0-flash")
+gemini = genai.GenerativeModel("gemini-2.0-flash-lite")
+
+# Groq for all LLM calls
+llm = ChatGroq(
+    model="llama-3.3-70b-versatile",  # fast, free, excellent quality
+    api_key=os.getenv("GROQ_API_KEY"),
+    temperature=0.1
+)
 
 MAX_RETRIES = 2
 
+async def _llm(prompt: str) -> str:
+    response = await llm.ainvoke(prompt)  # native async, no executor needed
+    return response.content
 
 async def _gemini(prompt: str) -> str:
-    """Simple async wrapper for Gemini."""
     import asyncio
     loop = asyncio.get_event_loop()
     response = await loop.run_in_executor(
@@ -76,7 +86,8 @@ Transcript:
 
 Return ONLY the labeled transcript, nothing else."""
 
-    diarized = await _gemini(prompt)
+    # diarized = await _gemini(prompt)
+    diarized = await _llm(prompt)
 
     speakers = list(set(re.findall(r'^(Speaker [A-Z]|[\w\s]+):', diarized, re.MULTILINE)))
     speakers = [s.strip() for s in speakers if s.strip()]
@@ -125,7 +136,8 @@ JSON schema:
 Meeting transcript:
 {transcript}"""
 
-    raw = await _gemini(prompt)
+    # raw = await _gemini(prompt)
+    raw = await _llm(prompt)
 
     try:
         clean = re.sub(r"```json|```", "", raw).strip()
@@ -169,7 +181,8 @@ Return raw JSON only, no markdown:
   "issues": ["list of issues if any"]
 }}"""
 
-    raw = await _gemini(prompt)
+    # raw = await _gemini(prompt)
+    raw = await _llm(prompt)
 
     try:
         clean = re.sub(r"```json|```", "", raw).strip()
@@ -212,7 +225,8 @@ OPEN QUESTIONS:
 
 Start with "Subject: ..." """
 
-    email = await _gemini(prompt)
+    # email = await _gemini(prompt)
+    email = await _llm(prompt)
     return {**state, "follow_up_email": email, "status": "done"}
 
 
