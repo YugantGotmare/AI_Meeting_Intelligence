@@ -53,9 +53,7 @@ async def transcribe(state: AgentState) -> AgentState:
         with open(file_path, "rb") as f:
             response = await whisper_client.audio.transcriptions.create(
                 model="whisper-1",
-                file=f,
-                response_format="verbose_json",
-                timestamp_granularities=["segment"]
+                file=f
             )
 
         return {**state, "transcript": response.text, "status": "transcribed"}
