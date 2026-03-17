@@ -53,8 +53,6 @@ uvicorn app.main:app --reload
 # → Docs: http://localhost:8000/docs
 ```
 
-dfasdfsffffffffffffffffffffff
-
 ### Frontend
 
 ```bash
