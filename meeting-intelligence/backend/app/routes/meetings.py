@@ -64,6 +64,8 @@ async def run_agent(meeting_id: str, file_path: str):
             await db.commit()
 
         except Exception as e:
+            import traceback
+            print(f"AGENT ERROR: {traceback.format_exc()}")
             meeting.status = "failed"
             meeting.error = str(e)
             await db.commit()
