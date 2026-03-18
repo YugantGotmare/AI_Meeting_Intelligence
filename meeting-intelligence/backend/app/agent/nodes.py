@@ -2,38 +2,30 @@ import json
 import re
 import os
 from openai import AsyncOpenAI
-import google.generativeai as genai
-from app.agent.state import AgentState, MeetingIntelligence, ActionItem, Decision
 from langchain_groq import ChatGroq
-
-# Whisper still uses OpenAI (best in class for transcription)
-whisper_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-# All LLM calls use Gemini
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-gemini = genai.GenerativeModel("gemini-2.0-flash-lite")
-
-# Groq for all LLM calls
-llm = ChatGroq(
-    model="llama-3.3-70b-versatile",  # fast, free, excellent quality
-    api_key=os.getenv("GROQ_API_KEY"),
-    temperature=0.1
-)
+from app.agent.state import AgentState, MeetingIntelligence, ActionItem, Decision
 
 MAX_RETRIES = 2
 
-async def _llm(prompt: str) -> str:
-    response = await llm.ainvoke(prompt)  # native async, no executor needed
-    return response.content
 
-async def _gemini(prompt: str) -> str:
-    import asyncio
-    loop = asyncio.get_event_loop()
-    response = await loop.run_in_executor(
-        None,
-        lambda: gemini.generate_content(prompt)
+def _get_whisper():
+    """Create Whisper client lazily so env vars are loaded first."""
+    return AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+
+def _get_llm():
+    """Create Groq client lazily."""
+    return ChatGroq(
+        model="llama-3.3-70b-versatile",
+        api_key=os.getenv("GROQ_API_KEY"),
+        temperature=0.1
     )
-    return response.text
+
+
+async def _llm(prompt: str) -> str:
+    """Async LLM call via Groq."""
+    response = await _get_llm().ainvoke(prompt)
+    return response.content
 
 
 # ─────────────────────────────────────────────
@@ -41,8 +33,10 @@ async def _gemini(prompt: str) -> str:
 # ─────────────────────────────────────────────
 async def transcribe(state: AgentState) -> AgentState:
     try:
+        client = _get_whisper()
         file_path = state["audio_file_path"]
 
+        # Compress if file is over 24MB
         if os.path.getsize(file_path) > 24 * 1024 * 1024:
             from pydub import AudioSegment
             audio = AudioSegment.from_file(file_path)
@@ -51,9 +45,11 @@ async def transcribe(state: AgentState) -> AgentState:
             file_path = compressed_path
 
         with open(file_path, "rb") as f:
-            response = await whisper_client.audio.transcriptions.create(
+            response = await client.audio.transcriptions.create(
                 model="whisper-1",
-                file=f
+                file=f,
+                response_format="verbose_json",
+                timestamp_granularities=["segment"]
             )
 
         return {**state, "transcript": response.text, "status": "transcribed"}
@@ -84,7 +80,6 @@ Transcript:
 
 Return ONLY the labeled transcript, nothing else."""
 
-    # diarized = await _gemini(prompt)
     diarized = await _llm(prompt)
 
     speakers = list(set(re.findall(r'^(Speaker [A-Z]|[\w\s]+):', diarized, re.MULTILINE)))
@@ -107,7 +102,7 @@ async def extract_intelligence(state: AgentState) -> AgentState:
 You MUST return valid JSON only. No markdown, no explanation, no code fences — just the raw JSON object.
 
 Extract:
-1. action_items: specific tasks assigned to people
+1. action_items: specific tasks assigned to people (include who, what, and deadline if mentioned)
 2. decisions: things that were decided/agreed upon
 3. open_questions: things raised but not resolved
 
@@ -115,16 +110,16 @@ JSON schema:
 {{
   "action_items": [
     {{
-      "task": "string",
-      "owner": "string (use Unknown if unclear)",
-      "deadline": "string or null",
+      "task": "string — what needs to be done",
+      "owner": "string — who is responsible (use 'Unknown' if unclear)",
+      "deadline": "string or null — when it's due",
       "priority": "low | medium | high"
     }}
   ],
   "decisions": [
     {{
-      "decision": "string",
-      "context": "string",
+      "decision": "string — what was decided",
+      "context": "string — why or how",
       "made_by": "string or null"
     }}
   ],
@@ -134,7 +129,6 @@ JSON schema:
 Meeting transcript:
 {transcript}"""
 
-    # raw = await _gemini(prompt)
     raw = await _llm(prompt)
 
     try:
@@ -151,7 +145,7 @@ Meeting transcript:
 
 
 # ─────────────────────────────────────────────
-# Node 4: Quality check
+# Node 4: Quality check — score the extraction
 # ─────────────────────────────────────────────
 async def quality_check(state: AgentState) -> AgentState:
     if state.get("status") == "failed":
@@ -162,10 +156,13 @@ async def quality_check(state: AgentState) -> AgentState:
 
     prompt = f"""You are a quality checker for meeting intelligence extraction.
 
-Score the quality from 0.0 to 1.0 based on:
-- Are action items specific with clear owners?
+Given the original transcript and the extracted intelligence, score the quality from 0.0 to 1.0.
+
+Consider:
+- Are action items specific enough? Do they have clear owners?
 - Are decisions accurately captured?
 - Are open questions real questions from the meeting?
+- Is anything important missed?
 
 Original transcript:
 {transcript}
@@ -173,13 +170,12 @@ Original transcript:
 Extracted intelligence:
 {intelligence.model_dump_json(indent=2)}
 
-Return raw JSON only, no markdown:
+Return raw JSON only, no markdown, no code fences:
 {{
   "score": 0.0-1.0,
   "issues": ["list of issues if any"]
 }}"""
 
-    # raw = await _gemini(prompt)
     raw = await _llm(prompt)
 
     try:
@@ -206,12 +202,19 @@ async def generate_email(state: AgentState) -> AgentState:
          for item in intelligence.action_items]
     ) or "None"
 
-    decisions_text = "\n".join([f"- {d.decision}" for d in intelligence.decisions]) or "None"
-    questions_text = "\n".join([f"- {q}" for q in intelligence.open_questions]) or "None"
+    decisions_text = "\n".join(
+        [f"- {d.decision}" for d in intelligence.decisions]
+    ) or "None"
+
+    questions_text = "\n".join(
+        [f"- {q}" for q in intelligence.open_questions]
+    ) or "None"
 
     prompt = f"""Write a professional follow-up email summarizing this meeting.
-Tone: clear, concise, professional.
 
+Tone: clear, concise, professional. No fluff.
+
+Data:
 ACTION ITEMS:
 {action_items_text}
 
@@ -221,9 +224,8 @@ DECISIONS MADE:
 OPEN QUESTIONS:
 {questions_text}
 
-Start with "Subject: ..." """
+Write the email with subject line included. Start with "Subject: ..."."""
 
-    # email = await _gemini(prompt)
     email = await _llm(prompt)
     return {**state, "follow_up_email": email, "status": "done"}
 
