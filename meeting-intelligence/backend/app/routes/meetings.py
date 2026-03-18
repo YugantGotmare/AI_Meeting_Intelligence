@@ -1,3 +1,5 @@
+import logging
+logging.basicConfig(level=logging.INFO)
 import uuid
 import os
 import asyncio
