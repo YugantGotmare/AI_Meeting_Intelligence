@@ -50,7 +50,7 @@ function StatusBadge({ status }) {
       padding: "2px 10px",
       borderRadius: "99px",
       fontSize: "11px",
-      fontWeight: 800,
+      fontWeight: 700,
       letterSpacing: "0.08em",
       textTransform: "uppercase",
       background: s.color + "22",
