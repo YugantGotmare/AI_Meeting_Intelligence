@@ -52,7 +52,7 @@ function StatusBadge({ status }) {
       fontSize: "11px",
       fontWeight: 700,
       letterSpacing: "0.08em",
-      textTransform: "lowercase",
+      textTransform: "uppercase",
       background: s.color + "22",
       color: s.color,
       border: `1px solid ${s.color}55`,
